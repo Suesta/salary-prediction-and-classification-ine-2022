@@ -1,0 +1,1292 @@
+---
+title: "Actividad A3"
+author: "Víctor Suesta Arribas"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+## 1.1. Carga y preparación de los datos
+
+En este apartado cargo el fichero `salarios_INE_2022_sample.csv` y reviso de forma básica su estructura. A partir del diccionario `dr_EES_2022.xlsx` identifico las variables categóricas codificadas (SEXO, TIPOPAIS, ESTU, ANOS2, TIPOJOR, TIPOCON, CNACE y CNO1) y las convierto a factores.
+
+Además, creo las variables agrupadas `CNACE_grp` y `CNO1_grp` siguiendo las reglas que se indican en el enunciado. En todo momento trato las variables categóricas como factores nominales, incluso aquellas que tienen un orden natural (como ANOS2 o ESTU).
+
+```{r carga_preparacion, message=FALSE, warning=FALSE}
+# cargo librerías necesarias
+library(plyr)
+library(dplyr)
+library(readr)
+library(stringr)
+
+# leo el fichero principal de salarios
+salarios_raw <- read_csv("salarios_INE_2022_sample.csv")
+
+# reviso la estructura básica sin listar todo el dataset
+glimpse(salarios_raw)
+
+# convierto las variables categóricas más importantes a factor
+salarios <- salarios_raw |>
+  mutate(
+    SEXO = factor(
+      SEXO,
+      levels = c(1, 6),
+      labels = c("Hombre", "Mujer")
+    ),
+    TIPOPAIS = factor(
+      TIPOPAIS,
+      levels = c(1, 2),
+      labels = c("Española", "Extranjera")
+    ),
+    TIPOJOR = factor(
+      TIPOJOR,
+      levels = c(1, 2),
+      labels = c("Tiempo completo", "Tiempo parcial")
+    ),
+    TIPOCON = factor(
+      TIPOCON,
+      levels = c(1, 2),
+      labels = c("Indefinido", "Determinado")
+    ),
+    ANOS2 = factor(ANOS2),
+    ESTU  = factor(ESTU),
+    CNACE = as.character(CNACE),
+    CNO1  = as.character(CNO1)
+  )
+
+# creo la variable CNACE_grp en tres niveles
+salarios <- salarios |>
+  mutate(
+    CNACE_grp = case_when(
+      str_sub(CNACE, 1, 1) %in% c("B", "C", "D", "E", "F") ~ "B–F",
+      str_sub(CNACE, 1, 1) %in% c("O", "P", "Q")           ~ "O–Q",
+      TRUE                                                 ~ "Resto"
+    ),
+    CNACE_grp = factor(CNACE_grp,
+                       levels = c("B–F", "O–Q", "Resto"))
+  )
+
+# creo la variable CNO1_grp en tres niveles
+salarios <- salarios |>
+  mutate(
+    letra_cno = str_sub(CNO1, 1, 1),
+    CNO1_grp = case_when(
+      letra_cno %in% c("A", "B", "C") ~ "A0–C0",
+      letra_cno %in% c("D", "E", "F", "G", "H", "I", "J") ~ "D0–J0",
+      TRUE ~ "Resto"
+    ),
+    CNO1_grp = factor(CNO1_grp,
+                      levels = c("A0–C0", "D0–J0", "Resto"))
+  ) |>
+  select(-letra_cno)
+
+# compruebo rápidamente la estructura final
+glimpse(salarios)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### 1.2. Estudio de correlación lineal
+
+En este apartado calculo la matriz de correlación lineal de Pearson entre las principales variables cuantitativas del estudio: el salario bruto anual excluyendo incapacidades (`RETRINOIN`), la antigüedad en años (`ANOANTI`) y la jornada anual pactada (`JAP`), que son las variables cuantitativas que utilizaré más adelante en los modelos de regresión.
+
+La correlación de Pearson mide la fuerza y la dirección de la relación lineal entre dos variables cuantitativas, con valores entre -1 y 1. Valores cercanos a 0 indican una relación lineal débil, mientras que valores más altos en valor absoluto indican asociaciones más fuertes. Un coeficiente positivo indica que, en promedio, cuando una variable aumenta, la otra también tiende a aumentar.
+
+
+```{r correlacion_lineal, message=FALSE, warning=FALSE}
+# selecciono las variables cuantitativas clave
+vars_cuant <- c("RETRINOIN", "ANOANTI", "JAP")
+
+datos_cuant <- salarios |>
+  dplyr::select(dplyr::all_of(vars_cuant))
+
+# resumen rápido de estas variables
+summary(datos_cuant)
+
+# matriz de correlaciones de Pearson
+matriz_cor <- cor(
+  datos_cuant,
+  use = "complete.obs",
+  method = "pearson"
+)
+
+# matriz redondeada 
+round(matriz_cor, 3)
+```
+
+### Interpretación
+
+La matriz de correlación obtenida para `RETRINOIN`, `ANOANTI` y `JAP` es, aproximadamente,
+
+\[
+\widehat{R} =
+\begin{pmatrix}
+1.000 & 0.312 & 0.249 \\
+0.312 & 1.000 & 0.063 \\
+0.249 & 0.063 & 1.000
+\end{pmatrix}
+\]
+
+A partir de estos valores:
+
+* La correlación entre **RETRINOIN y ANOANTI** es aproximadamente **0,312**. Entiendo que se trata de una relación lineal positiva y de intensidad más bien débil: en general, a mayor antigüedad el salario tiende a ser más alto, aunque la dispersión es grande y la relación está lejos de ser fuerte.
+* La correlación entre **RETRINOIN y JAP** es aproximadamente **0,249**, también positiva y algo más débil. Esto sugiere que quienes tienen una jornada anual pactada mayor tienden a tener un salario más elevado, pero de nuevo la asociación lineal es limitada.
+* La correlación entre **ANOANTI y JAP** es aproximadamente **0,063**, muy cercana a 0, de modo que prácticamente no se observa relación lineal entre la antigüedad y las horas anuales pactadas.
+
+En conjunto, tanto la antigüedad como la jornada anual pactada muestran una asociación lineal positiva con el salario, pero de intensidad débil según los coeficientes de correlación. Considero que esto es coherente con la idea de utilizar `ANOANTI` y `JAP` como predictores cuantitativos en los modelos de regresión lineal de los apartados siguientes, aunque por sí solos no explican una gran parte de la variabilidad de los salarios.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 1.3. Estudio comparativo del salario
+
+En este apartado comparo la distribución del salario bruto anual excluyendo incapacidades (**RETRINOIN**) según dos variables categóricas clave: el **sexo** (SEXO) y la **nacionalidad administrativa** (TIPOPAIS).
+
+Para cada una de ellas, represento gráficamente la distribución del salario mediante boxplots. Como la distribución de RETRINOIN es muy asimétrica hacia la derecha (mucha dispersión en los valores altos), aplico una **transformación logarítmica en el eje Y** únicamente para mejorar la visualización, tal como se sugiere en el enunciado.
+
+Después, comento de forma cualitativa las diferencias en nivel central, dispersión y presencia de valores extremos entre los grupos.
+
+
+```{r comparativo_salario, message=FALSE, warning=FALSE, fig.width=6, fig.height=4, dpi=72}
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+set.seed(123)
+
+# preparo datos para el gráfico (elimino NA y, si hace falta, muestreo)
+salarios_plot <- salarios |>
+  select(SEXO, TIPOPAIS, RETRINOIN) |>
+  drop_na()
+
+# si el dataset es muy grande, uso como máximo 50.000 observaciones para los gráficos
+n_max <- min(50000L, nrow(salarios_plot))
+salarios_plot <- salarios_plot[sample(seq_len(nrow(salarios_plot)), n_max), ]
+
+# gráfico 1: salario según sexo
+ggplot(salarios_plot, aes(x = SEXO, y = RETRINOIN)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  labs(
+    title = "Distribución del salario según sexo",
+    x = "Sexo",
+    y = "Salario bruto anual (escala log10)"
+  )
+
+# gráfico 2: salario según nacionalidad
+ggplot(salarios_plot, aes(x = TIPOPAIS, y = RETRINOIN)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  labs(
+    title = "Distribución del salario según nacionalidad",
+    x = "Nacionalidad",
+    y = "Salario bruto anual (escala log10)"
+  )
+``` 
+
+### Interpretación
+
+A partir de los boxplots en escala logarítmica observo que la distribución de **RETRINOIN** es muy asimétrica hacia la derecha: en ambos gráficos se ven colas largas de salarios altos y bastantes valores atípicos en la parte superior. La transformación `log10` en el eje Y me ayuda a comprimir estos valores y a visualizar mejor la parte central de la distribución.
+
+En el gráfico del salario según **sexo**, las cajas y las medianas de los dos grupos no son idénticas, lo que indica diferencias en el nivel central y en la dispersión de los salarios entre hombres y mujeres. En ambos casos aparecen valores extremos, pero la forma de la distribución no es exactamente la misma, lo que me sugiere que el sexo está relacionado con el salario de alguna manera.
+
+En el gráfico del salario según **nacionalidad** (TIPOPAIS) las medianas de los salarios para personas con nacionalidad española y extranjera son relativamente parecidas, aunque la dispersión no lo es tanto. En el grupo de nacionalidad extranjera se aprecian más valores en la parte baja de la distribución, mientras que en ambos grupos existen salarios claramente elevados.
+
+En conjunto, estos gráficos me indican que tanto el sexo como la nacionalidad están asociados a diferencias en la distribución de salarios, pero aquí solo realizo un análisis descriptivo. En los apartados siguientes estudiaré estas relaciones de forma más formal mediante modelos de regresión lineal.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 1.4. Generación de los conjuntos de entrenamiento y de test
+
+En este apartado separo el conjunto de datos en dos partes: un **conjunto de entrenamiento (`train`)** con el 80 % de las observaciones y un **conjunto de prueba (`test`)** con el 20 % restante.
+
+Sigo la instrucción del enunciado y fijo la semilla con `set.seed(42)` para garantizar que la partición sea reproducible.
+
+Los modelos de regresión lineal los ajusto utilizando el conjunto de entrenamiento y, posteriormente, evalúo su capacidad predictiva en el conjunto de prueba.
+
+
+```{r particion_train_test, message=FALSE, warning=FALSE}
+set.seed(42)  
+
+n_total <- nrow(salarios)
+n_train <- floor(0.8 * n_total)
+
+# índices aleatorios para el conjunto de entrenamiento
+indices_train <- sample(seq_len(n_total), size = n_train)
+
+# creo los dos conjuntos
+train <- salarios[indices_train, ]
+test  <- salarios[-indices_train, ]
+
+# compruebo tamaños
+nrow(train)
+nrow(test)
+```
+
+### Comentario
+
+Con esta partición, el conjunto `train` contiene aproximadamente el 80 % de las personas de la muestra y `test` el 20 % restante. A partir de aquí, ajusto los modelos sobre `train` y los valido sobre `test`, siguiendo la idea de evaluar la capacidad predictiva fuera de la muestra con la que se han estimado los parámetros.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 1.5. Estimación de modelos de regresión lineales simples con variable cualitativa
+
+En este apartado analizo la **brecha salarial bruta**, es decir, sin controlar todavía por otras variables explicativas.
+Para ello ajusto dos modelos de regresión lineal simples sobre el conjunto de entrenamiento:
+
+1. `RETRINOIN ~ SEXO`
+2. `RETRINOIN ~ TIPOPAIS`
+
+A partir de la salida de cada modelo obtengo:
+
+* la diferencia salarial media estimada entre los grupos,
+* el salario medio estimado del grupo más desfavorecido,
+* la significación estadística de la diferencia (p-valor),
+* y el valor de (R^2) ajustado como medida de capacidad explicativa.
+
+
+```{r reg_lineal_cualitativa, message=FALSE, warning=FALSE}
+# modelo lineal simple 1: RETRINOIN ~ SEXO
+mod_sexo <- lm(RETRINOIN ~ SEXO, data = train)
+summary(mod_sexo)
+
+# diferencia salarial y salarios medios estimados por sexo
+dif_sexo <- coef(mod_sexo)["SEXOMujer"]
+salario_hombre_hat <- coef(mod_sexo)[1]
+salario_mujer_hat  <- salario_hombre_hat + dif_sexo
+
+round(
+  c(
+    dif_sexo           = dif_sexo,
+    salario_hombre_hat = salario_hombre_hat,
+    salario_mujer_hat  = salario_mujer_hat
+  ),
+  2
+)
+
+# modelo lineal simple 2: RETRINOIN ~ TIPOPAIS
+mod_pais <- lm(RETRINOIN ~ TIPOPAIS, data = train)
+summary(mod_pais)
+
+# diferencia salarial y salarios medios estimados por nacionalidad
+dif_pais        <- coef(mod_pais)["TIPOPAISExtranjera"]
+salario_esp_hat <- coef(mod_pais)[1]
+salario_ext_hat <- salario_esp_hat + dif_pais
+
+round(
+  c(
+    dif_pais        = dif_pais,
+    salario_esp_hat = salario_esp_hat,
+    salario_ext_hat = salario_ext_hat
+  ),
+  2
+)
+```
+
+### Interpretación
+
+**Modelo 1: `RETRINOIN ~ SEXO`**
+
+En este modelo el grupo de referencia es **Hombre**.
+El intercepto es aproximadamente **31 053,94 euros**, que interpreto como el salario bruto anual medio estimado para los hombres.
+El coeficiente de `SEXOMujer` es de unos **-6 472,02 euros**, lo que significa que, según este modelo, las mujeres cobran de media unos **6 472 euros menos al año** que los hombres. El salario medio estimado para las mujeres es, por tanto, alrededor de **24 581,92 euros**, de modo que el grupo más desfavorecido en este modelo simple es el de **mujeres**.
+
+El p-valor asociado al coeficiente de `SEXOMujer` es `< 2·10^{-16}`, muy inferior a 0,05. Por tanto, concluyo que la diferencia salarial media entre hombres y mujeres es **estadísticamente significativa** al nivel de confianza del 95 %.
+El (R^2) ajustado del modelo es aproximadamente **0,0173**, es decir, solo alrededor del **1,7 %** de la variabilidad del salario se explica por el sexo. Aunque la diferencia media es clara, el salario depende de muchos otros factores que aquí todavía no estoy considerando.
+
+**Modelo 2: `RETRINOIN ~ TIPOPAIS`**
+
+En este modelo el grupo de referencia es **TIPOPAIS = Española**.
+El intercepto es de unos **28 532,61 euros**, que representa el salario medio estimado para las personas con nacionalidad española.
+El coeficiente de `TIPOPAISExtranjera` es aproximadamente **-5 547,15 euros**, lo que indica que las personas con nacionalidad extranjera cobran de media unos **5 547 euros menos al año** que las de nacionalidad española. El salario medio estimado para el grupo extranjero es así de unos **22 985,46 euros**, por lo que el grupo más desfavorecido en este modelo es el de **personas con nacionalidad extranjera**.
+
+El p-valor del coeficiente de `TIPOPAISExtranjera` es aproximadamente **2,2·10^{-7}**, también muy inferior a 0,05, de manera que la diferencia salarial media entre nacionales y extranjeros es **estadísticamente significativa**.
+En cuanto al ajuste, el (R^2) ajustado es cercano a **0,0032**, lo que significa que solo alrededor del **0,3 %** de la variabilidad del salario se explica por la nacionalidad. La capacidad explicativa de este modelo simple es todavía más limitada que en el caso del sexo.
+
+**Conclusión del apartado**
+
+En conjunto, estos dos modelos lineales simples me muestran que, sin controlar por otras variables, las **mujeres** y las **personas con nacionalidad extranjera** presentan salarios medios estimados más bajos que los hombres y las personas con nacionalidad española. Sin embargo, los valores de (R^2) ajustado son muy bajos en ambos casos, de modo que estos factores por sí solos explican solo una pequeña parte de la variabilidad salarial. En los apartados siguientes paso a estudiar modelos de regresión múltiple que incorporan otros predictores (antigüedad, jornada, nivel de estudios, etc.) para obtener una visión más ajustada de la brecha salarial.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 1.6. Estimación del modelo de regresión lineal múltiple con predictores cuantitativos
+
+Se sugiere que el salario debería depender principalmente de la cantidad de trabajo y de la experiencia. Para comprobarlo, en este apartado estimo un modelo de regresión lineal múltiple utilizando únicamente las variables cuantitativas explicativas del estudio: la antigüedad en años (`ANOANTI`) y la jornada anual pactada (`JAP`).
+
+El modelo considerado tiene la forma
+
+\[
+\text{RETRINOIN} = \beta_0 + \beta_1 \cdot \text{ANOANTI} + \beta_2 \cdot \text{JAP}.
+\]
+
+A continuación interpreto los coeficientes y el valor de (R^2) ajustado.
+
+```{r reg_lineal_cuantitativos, message=FALSE, warning=FALSE}
+# modelo de regresión lineal múltiple con predictores cuantitativos
+mod_cuant <- lm(RETRINOIN ~ ANOANTI + JAP, data = train)
+
+# resumen del modelo
+summary(mod_cuant)
+
+# extracción de coeficientes y R^2 ajustado
+coef(mod_cuant)
+summary(mod_cuant)$adj.r.squared
+```
+
+### Interpretación
+
+En este modelo, la variable respuesta es el salario bruto anual excluyendo incapacidades (`RETRINOIN`) y los predicores cuantitativos son la antigüedad en años (`ANOANTI`) y la jornada anual pactada (`JAP`).
+
+* El **intercepto** ((\beta_0)) es aproximadamente **-5 862,92 euros**. Lo interpreto como el salario medio estimado para una persona con antigüedad 0 y jornada anual 0 horas. Aunque este caso no es realista, el término constante es necesario para definir correctamente el plano de regresión.
+
+* El coeficiente asociado a **ANOANTI** ((\beta_1)) es de unos **712,90 euros**. Lo interpreto como el incremento medio de salario asociado a **un año adicional de antigüedad**, manteniendo constante la jornada anual pactada. Es decir, a igualdad de `JAP`, una persona con un año más de antigüedad tiene, en promedio, un salario aproximadamente **713 euros** más alto según el modelo.
+
+* El coeficiente de **JAP** ((\beta_2)) es aproximadamente **16,37 euros**. Mide el cambio medio en el salario por **cada hora anual adicional pactada**, manteniendo fija la antigüedad. Si dos personas tienen la misma antigüedad pero una de ellas tiene una jornada anual 1 hora mayor, el modelo estima que su salario aumenta en torno a **16 euros**.
+
+En cuanto al ajuste global, el (R^2) ajustado es aproximadamente **0,1490**, de modo que alrededor del **14,9 %** de la variabilidad del salario bruto anual se explica conjuntamente por la antigüedad y la jornada anual pactada. Este valor de (R^2) ajustado es claramente mayor que el de los modelos lineales simples del apartado 1.5 (solo `SEXO` o solo `TIPOPAIS`), lo que me indica que `ANOANTI` y `JAP` explican una parte más relevante de las diferencias salariales.
+
+Aun así, sigue quedando una proporción importante de variabilidad sin explicar, por lo que tiene sentido incorporar más variables (en particular, variables cualitativas como sexo, nacionalidad o nivel de estudios) en el modelo múltiple del apartado 1.7.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 1.7. Estimación del modelo de regresión lineal múltiple con predictores cuantitativos y cualitativos
+
+En este apartado amplío el modelo del punto 1.6 añadiendo las variables cualitativas del estudio. El objetivo es:
+
+* Ajustar un **modelo completo** con las variables cuantitativas (`ANOANTI`, `JAP`) y las principales variables cualitativas (`SEXO`, `TIPOPAIS`, `ESTU`, `ANOS2`, `TIPOJOR`, `TIPOCON`, `CNACE_grp`, `CNO1_grp`).
+* Revisar la **significatividad** de los coeficientes, el **(R^2) ajustado** y los valores de **VIF** para evaluar la multicolinealidad.
+* Proponer un **modelo final** algo más sencillo, justificando qué variables mantengo.
+* Comparar los coeficientes de **SEXO** y **TIPOPAIS** con los del apartado 1.5 (brecha “bruta” frente a “ajustada”).
+
+
+```{r reg_lineal_mixto, message=FALSE, warning=FALSE}
+library(car)  # para la función vif()
+
+# modelo completo con cuantitativas + cualitativas
+mod_completo <- lm(
+  RETRINOIN ~ ANOANTI + JAP +
+    SEXO + TIPOPAIS + ESTU + ANOS2 +
+    TIPOJOR + TIPOCON + CNACE_grp + CNO1_grp,
+  data = train
+)
+
+# resumen del modelo completo y VIF
+summary(mod_completo)
+vif(mod_completo)
+
+# modelo final tras eliminar ANOS2 y TIPOCON
+mod_final <- lm(
+  RETRINOIN ~ ANOANTI + JAP +
+    SEXO + TIPOPAIS + ESTU +
+    TIPOJOR + CNACE_grp + CNO1_grp,
+  data = train
+)
+
+# resumen del modelo final
+summary(mod_final)
+
+# R^2 ajustado del modelo final
+summary(mod_final)$adj.r.squared
+
+# coeficientes de SEXO y TIPOPAIS en el modelo final
+coef(mod_final)[c("SEXOMujer", "TIPOPAISExtranjera")]
+```
+
+
+
+### Interpretación
+
+#### Modelo completo
+
+En el modelo completo incluyo como predictores:
+
+* las variables cuantitativas `ANOANTI` (antigüedad en años) y `JAP` (jornada anual pactada), y
+* las variables cualitativas `SEXO`, `TIPOPAIS`, `ESTU`, `ANOS2`, `TIPOJOR`, `TIPOCON`, `CNACE_grp` y `CNO1_grp`.
+
+El (R^2) ajustado del modelo completo es aproximadamente **0,3612**, de modo que el modelo explica en torno al **36 %** de la variabilidad del salario bruto anual (`RETRINOIN`). Este valor es claramente superior al (R^2) ajustado del modelo solo con `ANOANTI` y `JAP` del apartado 1.6 (alrededor del 14,9 %), así que las variables cualitativas añaden bastante información relevante sobre el salario.
+
+En la salida de `summary(mod_completo)` observo que:
+
+* Son claramente significativas (p-valor < 0,05) variables como:
+
+  * las cuantitativas **`ANOANTI`** y **`JAP`**,
+  * **`SEXO`** y **`TIPOPAIS`**,
+  * los niveles más altos de **`ESTU`** (especialmente `ESTU5`, `ESTU6`, `ESTU7`),
+  * **`TIPOJOR`** y **`TIPOCON`**,
+  * y los indicadores de **sector (`CNACE_grp`)** y **ocupación (`CNO1_grp`)**.
+* En cambio, varios niveles de `ESTU` (como `ESTU2`, `ESTU3`, `ESTU4`) y prácticamente todos los niveles de `ANOS2` tienen p-valores altos, así que su contribución marginal es limitada cuando ya están el resto de predictores en el modelo.
+
+Al calcular los VIF con `vif(mod_completo)` obtengo valores moderados, todos en torno a 1–3. Como en el enunciado se sugiere preocuparse por multicolinealidad a partir de valores cercanos a 5, concluyo que **no se detectan problemas importantes de multicolinealidad** y que ninguna variable parece redundante por este motivo.
+
+#### Modelo final
+
+A partir del modelo completo, y sin utilizar métodos automáticos de selección, simplifico el modelo eliminando:
+
+* `ANOS2`, cuyos niveles no resultan significativos y cuyo efecto puede estar en parte recogido por la combinación de antigüedad (`ANOANTI`) y otras variables, y
+* `TIPOCON`, que aunque es significativa, aporta una mejora relativamente pequeña en el (R^2) ajustado.
+
+Para mantener un modelo más parsimonioso priorizo variables estructurales clave (antigüedad, jornada, estudios, tipo de jornada, sector y ocupación).
+
+El modelo final incluye como predictores las variables `ANOANTI`, `JAP`, `SEXO`, `TIPOPAIS`, `ESTU`, `TIPOJOR`, `CNACE_grp` y `CNO1_grp`.
+
+El (R^2) ajustado del modelo final es aproximadamente **0,3520**, muy cercano al 0,3612 del modelo completo. Es decir, el modelo final sigue explicando alrededor del **35 %** de la variabilidad del salario, pero con menos predictores.
+
+Algunos coeficientes clave del modelo final son:
+
+* **`ANOANTI` ≈ 623,41**: un año adicional de antigüedad, manteniendo constantes el resto de variables, se asocia con un incremento medio de unos **623 euros** en el salario anual.
+* **`JAP` ≈ 7,66**: una hora anual más de jornada pactada se asocia con un aumento medio de unos **7–8 euros** en el salario anual, a igualdad de las demás variables.
+* **`SEXOMujer` ≈ −6 118,18**: una mujer con la misma antigüedad, jornada, estudios, tipo de jornada, sector y grupo ocupacional que un hombre tiene, según el modelo, un salario medio unos **6 118 euros inferior** al del hombre.
+* **`TIPOPAISExtranjera` ≈ +2 444,42**: a igualdad de antigüedad, jornada, estudios, tipo de jornada, sector y ocupación, una persona con nacionalidad extranjera tiene un salario medio estimado unos **2 444 euros superior** al de una persona con nacionalidad española.
+* **`TIPOJORTiempo parcial` ≈ −6 213,77**: trabajar a tiempo parcial se asocia con un salario anual claramente menor que trabajar a tiempo completo, una vez controladas las demás variables.
+
+Los coeficientes de `CNACE_grp` y `CNO1_grp` también son significativos y negativos para algunos niveles, lo que refleja diferencias salariales relevantes entre sectores de actividad y grupos ocupacionales respecto a sus categorías de referencia.
+
+#### Comparación de SEXO y TIPOPAIS: brecha “bruta” vs “ajustada”
+
+En el apartado 1.5, con modelos lineales simples, obtenía las diferencias “brutas”:
+
+* Modelo simple `RETRINOIN ~ SEXO`:
+
+  * `SEXOMujer` ≈ −6 472,02 → las mujeres cobraban de media unos **6 472 euros menos** que los hombres.
+* Modelo simple `RETRINOIN ~ TIPOPAIS`:
+
+  * `TIPOPAISExtranjera` ≈ −5 547,15 → las personas extranjeras cobraban de media unos **5 547 euros menos** que las españolas.
+
+En el **modelo múltiple final**, que ajusta por:
+
+* antigüedad (`ANOANTI`),
+* jornada (`JAP`),
+* nivel de estudios (`ESTU`),
+* tipo de jornada (`TIPOJOR`),
+* sector (`CNACE_grp`),
+* y grupo ocupacional (`CNO1_grp`),
+
+los coeficientes pasan a ser:
+
+* `SEXOMujer` ≈ −6 118,18: la brecha sigue siendo negativa y de tamaño similar. Las mujeres continúan teniendo un salario medio más bajo que los hombres incluso después de ajustar por el resto de variables explicativas.
+* `TIPOPAISExtranjera` ≈ +2 444,42: la brecha cambia de signo. Una vez controlo por las otras variables, las personas con nacionalidad extranjera tienen un salario medio superior al de las personas con nacionalidad española.
+
+En resumen:
+
+* Para **SEXO**, la diferencia entre hombres y mujeres **no desaparece** al ajustar por otros factores. La brecha salarial “ajustada” sigue siendo negativa y de magnitud similar a la brecha “bruta”, lo que sugiere que las mujeres permanecen en una posición salarial desfavorable incluso controlando por antigüedad, jornada, estudios, sector y ocupación.
+* Para **TIPOPAIS**, en cambio, buena parte de la diferencia observada en el modelo simple parece explicarse por una distribución distinta de las personas extranjeras en términos de sector, categoría ocupacional, tipo de jornada, etc. Al controlar por estas variables, la relación se invierte y la brecha “ajustada” pasa a ser positiva.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 1.8. Diagnosis del modelo
+
+En este apartado hago la **diagnosis gráfica** del modelo de regresión lineal múltiple que he elegido como referencia. Trabajo con el **modelo final `mod_final`** del apartado 1.7.
+
+El enunciado me pide explícitamente:
+
+* Un **gráfico de residuos vs valores ajustados** para revisar la homocedasticidad.
+* Un **gráfico cuantil–cuantil (Q–Q plot)** que compare los residuos con una distribución normal.
+* Una **interpretación** de los resultados.
+
+
+```{r diagnostico_mod_final, message=FALSE, warning=FALSE}
+# obtengo residuos y valores ajustados del modelo final
+residuos   <- resid(mod_final)
+ajustados  <- fitted(mod_final)
+
+# 1) Residuos vs valores ajustados
+plot(
+  ajustados, residuos,
+  xlab = "Valores ajustados",
+  ylab = "Residuos",
+  main = "Residuos vs valores ajustados"
+)
+abline(h = 0, col = "red")
+
+# 2) Q–Q plot de los residuos
+qqnorm(residuos, main = "Q–Q plot de los residuos")
+qqline(residuos, col = "red")
+```
+
+
+
+
+### Interpretación
+
+En el **gráfico de residuos vs valores ajustados** veo que los puntos se distribuyen alrededor de la recta horizontal en 0. No aparece una curva muy marcada, aunque sí noto algo más de dispersión en la zona de valores ajustados altos, lo cual tiene sentido porque el salario es una variable bastante dispersa y asimétrica. En conjunto, no detecto un patrón muy claro que indique una violación grave del supuesto de homocedasticidad, aunque el ajuste no es perfecto.
+
+En el **Q–Q plot de los residuos**, la mayoría de los puntos sigue la recta teórica de la normal de forma razonable en la parte central. En las colas (residuos muy grandes en valor absoluto) sí se observan desviaciones respecto a la línea, lo que apunta a que la normalidad de los residuos no se cumple del todo, especialmente en los extremos.
+
+En resumen, interpreto que los supuestos de **linealidad, homocedasticidad aproximada y normalidad aproximada de los residuos** se cumplen de forma aceptable para este conjunto de datos salariales, aunque hay desviaciones en las colas y algo de heterogeneidad para salarios altos. Teniendo en cuenta que trabajo con datos reales y bastante asimétricos, considero que el modelo es razonable para los análisis posteriores, pero teniendo presentes estas limitaciones.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 1.9. Predicción del modelo
+
+En este apartado utilizo el **modelo múltiple final** del punto 1.7 (`mod_final`) para:
+
+1. Predecir los salarios en el conjunto **test**.
+2. Representar gráficamente los **valores predichos frente a los observados**.
+3. Calcular la **raíz cuadrada del error cuadrático medio (RMSE)** y comentarla brevemente.
+
+
+```{r prediccion_test_rmse, message=FALSE, warning=FALSE}
+# 1) Predicciones del modelo final sobre el conjunto test
+pred_test <- predict(mod_final, newdata = test)
+
+# 2) Gráfico valores observados vs predichos
+plot(
+  test$RETRINOIN, pred_test,
+  xlab = "Salario observado (test)",
+  ylab = "Salario predicho",
+  main = "Valores observados vs predichos (modelo final)"
+)
+abline(a = 0, b = 1, col = "red") 
+
+# 3) Cálculo del RMSE
+errores <- test$RETRINOIN - pred_test
+rmse <- sqrt(mean(errores^2))
+
+rmse
+```
+
+### Interpretación
+
+En la figura de valores **observados vs predichos** veo que la mayoría de puntos se sitúan alrededor de la línea identidad (en rojo), aunque con bastante dispersión, sobre todo para los salarios más altos. Esto encaja con lo que ya había visto en la diagnosis: el modelo recoge una parte de la variabilidad del salario, pero no llega a ajustarse bien a todos los valores extremos.
+
+El RMSE que obtengo es aproximadamente **16 710,79 euros**.
+Este valor lo interpreto como el **error típico de predicción** del modelo en el conjunto de prueba, medido en euros. Es decir, en promedio, las predicciones se desvían del salario observado alrededor de esa cantidad.
+
+Si lo comparo con la escala de la variable respuesta (por ejemplo, con la mediana de `RETRINOIN` del conjunto de datos, que está en torno a los 23 000 euros), el RMSE sugiere que el modelo tiene un **error de tamaño moderado/alto**. Me parece razonable, porque el salario depende de muchos factores que no aparecen en el dataset (responsabilidades concretas del puesto, complementos específicos, etc.). Aun así, considero que el modelo es útil para captar tendencias generales y diferencias medias entre grupos, que es el objetivo principal del análisis.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 2.1. Preparación de los datos (Binarización)
+
+Lo que se pide en el enunciado aquí es:
+
+1. Crear una variable binaria **SalarioAlto** a partir de la **mediana global** de `RETRINOIN`.
+2. Codificarla como 1 (Alto) si el salario es mayor que la mediana y 0 en caso contrario.
+3. Convertirla a factor.
+4. Reutilizar la misma partición **train/test** del apartado 1.4.
+
+
+```{r binarizacion_salario_alto, message=FALSE, warning=FALSE}
+# 1) Cálculo de la mediana global del salario
+mediana_salario <- median(salarios$RETRINOIN)
+
+mediana_salario
+
+# 2) Creo la variable binaria SalarioAlto (1 = Alto, 0 = No Alto)
+salarios$SalarioAlto <- ifelse(
+  salarios$RETRINOIN > mediana_salario,
+  1,  # salario alto
+  0   # no alto
+)
+
+# 3) La convierto a factor
+salarios$SalarioAlto <- factor(
+  salarios$SalarioAlto,
+  levels = c(0, 1),
+  labels = c("No Alto", "Alto")
+)
+
+# 4) Reutilizo la misma partición train/test del apartado 1.4
+
+train_log <- salarios[indices_train, ]
+test_log  <- salarios[-indices_train, ]
+
+# compruebo el equilibrio aproximado de la nueva variable
+table(train_log$SalarioAlto)
+prop.table(table(train_log$SalarioAlto))
+```
+
+### Explicación breve para el informe
+
+Primero calculo la **mediana global** del salario bruto anual excluyendo incapacidades (`RETRINOIN`) usando todo el conjunto de datos. Uso esta mediana como **punto de corte** para definir la nueva variable binaria `SalarioAlto`.
+
+Defino `SalarioAlto = 1` (“Alto”) cuando el salario está por encima de la mediana y `SalarioAlto = 0` (“No Alto”) en caso contrario. Después convierto esta variable a **factor**, fijando explícitamente `"No Alto"` como categoría de referencia.
+
+Para poder comparar con la parte de regresión lineal, reutilizo la misma partición en entrenamiento y prueba del apartado 1.4, usando los mismos índices aleatorios `indices_train`. De esta forma obtengo los data frames `train_log` y `test_log`, que contienen todas las variables del estudio más la nueva variable binaria de respuesta.
+
+A partir de aquí, la variable `RETRINOIN` **ya no la utilizo como predictor** en los modelos de regresión logística, para evitar una colinealidad directa con `SalarioAlto`, tal y como indica el enunciado.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 2.2. Estimación del modelo de regresión logística
+
+En este apartado ajusto un modelo de **regresión logística binaria** en el que la variable respuesta es `SalarioAlto` (1 = “Alto”, 0 = “No Alto”). Como predictores utilizo las variables que indica el enunciado: `SEXO`, `ANOANTI`, `JAP`, `ESTU`, `TIPOCON`, `CNACE_grp`, `CNO1_grp` y `TIPOPAIS`, trabajando siempre sobre el conjunto de entrenamiento `train_log`.
+
+
+```{r modelo_logistico_inicial, message=FALSE, warning=FALSE}
+# modelo de regresión logística inicial
+mod_logit <- glm(
+  SalarioAlto ~ SEXO + ANOANTI + JAP + ESTU +
+    TIPOCON + CNACE_grp + CNO1_grp + TIPOPAIS,
+  data = train_log,
+  family = binomial(link = "logit")
+)
+
+# resumen del modelo
+summary(mod_logit)
+```
+
+
+
+### Interpretación
+
+Con este modelo estoy ajustando el **logit** de la probabilidad de tener un salario alto en función de los predictores anteriores. A partir del resumen de `summary(mod_logit)` observo lo siguiente:
+
+* Veo que son **claramente significativos** (p-valor < 0,05) los coeficientes de:
+
+  * `SEXO` (nivel Mujer),
+  * `ANOANTI`,
+  * `JAP`,
+  * los niveles altos de `ESTU` (de `ESTU2` a `ESTU7`),
+  * `TIPOCONDeterminado`,
+  * `CNACE_grpResto`,
+  * y ambos niveles de `CNO1_grp` (`D0–J0` y `Resto`).
+
+En conjunto, interpreto estos resultados de la siguiente manera:
+
+* **Más antigüedad (`ANOANTI`) y más jornada anual (`JAP`)** se asocian con una **mayor probabilidad** de tener un salario alto.
+* Los **niveles más altos de estudios (`ESTU`)** aumentan la probabilidad de salario alto respecto al nivel de referencia.
+* Ser **mujer** y tener un **contrato de duración determinada** reduce la probabilidad de salario alto frente a sus categorías de referencia.
+* Determinados sectores (`CNACE_grpResto`) y grupos ocupacionales (`CNO1_grp`) se asocian con una probabilidad menor de tener salario alto en comparación con sus grupos de referencia.
+
+En cambio, los coeficientes de `CNACE_grpO–Q` y `TIPOPAISExtranjera` tienen p-valores elevados y son cercanos a cero, así que en este modelo **no puedo decir que tengan un efecto estadísticamente claro** sobre la probabilidad de salario alto una vez tengo en cuenta el resto de variables.
+
+Si quisiera simplificar el modelo, las primeras candidatas a eliminar serían `CNACE_grpO–Q` y `TIPOPAISExtranjera`, ya que sus efectos no resultan significativos. Aun así, en los siguientes apartados sigo utilizando este **modelo logístico inicial** como modelo de referencia, tal y como pide el enunciado.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 2.3. Cálculo de las OR (Odds-Ratio)
+
+En este apartado calculo las **odds-ratio (OR)** a partir de los coeficientes del modelo logístico `mod_logit` del apartado 2.2 y las interpreto para las variables más relevantes. Según el módulo de regresión logística, la OR de un predictor se obtiene como
+
+\[
+\text{OR} = e^{\beta}
+\]
+
+y mide cómo se multiplican las **odds** de tener salario alto (`SalarioAlto = 1`) cuando el predictor aumenta una unidad (o se pasa a cierta categoría), manteniendo el resto de variables constantes.
+
+
+```{r odds_ratio_mod_logit, message=FALSE, warning=FALSE}
+# cálculo de las odds-ratio para todos los coeficientes del modelo logístico
+or_mod_logit <- exp(coef(mod_logit))
+or_mod_logit
+```
+
+También podemos mirar solo algunas variables clave con:
+
+
+```{r odds_ratio_clave, message=FALSE, warning=FALSE}
+or_mod_logit[c(
+  "SEXOMujer",
+  "ANOANTI",
+  "JAP",
+  "ESTU4", "ESTU5", "ESTU6", "ESTU7",
+  "TIPOCONDeterminado",
+  "CNACE_grpResto",
+  "CNO1_grpD0–J0",
+  "CNO1_grpResto"
+)]
+```
+
+
+
+(Aquí uso los nombres tal y como aparecen en `summary(mod_logit)`. Si hubiera algún problema con los guiones, puedo consultar `names(coef(mod_logit))`.)
+
+### Interpretación de las OR
+
+A partir de los coeficientes del modelo del apartado 2.2, las OR aproximadas para algunas variables importantes son:
+
+* **SEXO (Mujer)**
+  Coeficiente ≈ −1,12 ⇒ OR ≈ **0,33**.
+  Esto significa que, manteniendo constantes el resto de variables, **las odds de tener un salario alto para las mujeres son aproximadamente un 67 % menores** que las de los hombres (1 − 0,33 ≈ 0,67). En términos sencillos, ser mujer reduce la probabilidad de estar en el grupo de salario alto.
+
+* **ANOANTI (antigüedad)**
+  Coeficiente ≈ 0,0981 ⇒ OR ≈ **1,10**.
+  Cada año adicional de antigüedad **multiplica por ~1,10** las odds de tener un salario alto. Es decir, más antigüedad aumenta la probabilidad de estar en el grupo “Alto”.
+
+* **JAP (jornada anual pactada)**
+  Coeficiente ≈ 0,00308 ⇒ OR ≈ **1,00** (≈ 1,003).
+  El efecto por una sola hora anual es pequeño, pero positivo: una jornada mayor se asocia con odds algo más altas de salario alto.
+
+* **Nivel de estudios (ESTU)**
+  (comparado con el nivel de estudios de referencia):
+
+  * `ESTU4`: OR ≈ **6,64**
+  * `ESTU5`: OR ≈ **10,36**
+  * `ESTU6`: OR ≈ **18,44**
+  * `ESTU7`: OR ≈ **33,89**
+
+  Estos valores indican que los niveles altos de estudios multiplican de forma muy intensa las odds de tener un salario alto respecto al nivel base. Cuanto mayor es el nivel de estudios, mayor es la probabilidad de pertenecer al grupo de salario alto.
+
+* **TIPOCON (Determinado)**
+  Coeficiente ≈ −0,34 ⇒ OR ≈ **0,71**.
+  Tener un contrato de duración determinada **reduce las odds** de salario alto respecto al contrato indefinido. Es decir, a igualdad de otras variables, las personas con contrato determinado tienen menos probabilidad de estar en el grupo “Alto”.
+
+* **CNACE_grpResto** (ciertos sectores frente al sector de referencia)
+  Coeficiente ≈ −0,68 ⇒ OR ≈ **0,51**.
+  Trabajar en estos sectores se asocia con unas odds de salario alto aproximadamente **la mitad** que en el sector de referencia.
+
+* **CNO1_grpD0–J0 y CNO1_grpResto** (grupos ocupacionales)
+
+  * `CNO1_grpD0–J0`: OR ≈ **0,38**
+  * `CNO1_grpResto`: OR ≈ **0,25**
+
+  Ambos valores son menores que 1, lo que indica que ciertas categorías ocupacionales tienen **menos probabilidad** de presentar salarios altos que el grupo ocupacional de referencia.
+
+* **TIPOPAIS (Extranjera)**
+  Coeficiente ≈ −0,08 ⇒ OR ≈ **0,92**, con un p-valor alto en el modelo.
+  Esta OR está muy cerca de 1 y, además, el efecto no es estadísticamente significativo, por lo que no puedo afirmar que la nacionalidad tenga un efecto claro sobre la probabilidad de salario alto en este modelo.
+
+### Resumen: factores que aumentan o reducen la probabilidad de salario alto
+
+Tomando como **evento de interés** “tener un salario alto” (`SalarioAlto = 1`), a partir de las OR puedo resumir que:
+
+* Son **factores que aumentan las odds** (OR > 1):
+
+  * Mayor antigüedad (`ANOANTI`).
+  * Mayor jornada anual (`JAP`, aunque con efecto moderado).
+  * Niveles altos de estudios (`ESTU2`–`ESTU7`, especialmente los más elevados).
+
+* Son **factores que reducen las odds** (OR < 1):
+
+  * Ser mujer (`SEXOMujer`).
+  * Tener contrato de duración determinada (`TIPOCONDeterminado`).
+  * Pertenecer a ciertos sectores (`CNACE_grpResto`).
+  * Pertenecer a ciertos grupos ocupacionales (`CNO1_grpD0–J0` y `CNO1_grpResto`).
+
+De esta forma identifico qué variables del modelo se asocian con una mayor probabilidad de estar en el grupo de salario alto y cuáles se relacionan con una probabilidad menor, siempre condicionado al resto de predictores incluidos en el modelo logístico.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+## 2.4. Matriz de confusión
+
+En este apartado evalúo la precisión del modelo logístico `mod_logit` sobre el conjunto de prueba `test_log`, usando un punto de corte de probabilidad 0,5 y considerando `SalarioAlto = "Alto"` como la clase positiva.
+
+
+```{r matriz_confusion_metricas, message=FALSE, warning=FALSE}
+# 1) Probabilidades predichas en el conjunto de test
+prob_test <- predict(mod_logit, newdata = test_log, type = "response")
+
+# 2) Clasificación usando punto de corte 0.5
+clase_pred <- ifelse(prob_test >= 0.5, "Alto", "No Alto")
+
+# me aseguro de que las etiquetas coinciden con las de SalarioAlto
+clase_pred <- factor(clase_pred, levels = c("No Alto", "Alto"))
+
+# 3) Matriz de confusión
+matriz_conf <- table(Real = test_log$SalarioAlto,
+                     Predicho = clase_pred)
+matriz_conf
+
+# 4) Cálculo de Accuracy, Sensibilidad y Especificidad
+TP <- matriz_conf["Alto", "Alto"]
+TN <- matriz_conf["No Alto", "No Alto"]
+FP <- matriz_conf["No Alto", "Alto"]
+FN <- matriz_conf["Alto", "No Alto"]
+
+accuracy      <- (TP + TN) / sum(matriz_conf)
+sensibilidad  <- TP / (TP + FN)   # true positive rate
+especificidad <- TN / (TN + FP)   # true negative rate
+
+accuracy
+sensibilidad
+especificidad
+```
+
+Con mi ejecución obtengo:
+
+- Matriz de confusión:
+
+```text
+          Predicho
+Real      No Alto Alto
+  No Alto     788  219
+  Alto        240  753
+```
+
+* `accuracy     ≈ 0.7705`
+* `sensibilidad ≈ 0.7583`
+* `especificidad ≈ 0.7825`
+
+### Interpretación
+
+A partir de las probabilidades predichas por el modelo `mod_logit` en el conjunto de prueba, clasifico cada observación como “Alto” si la probabilidad es mayor o igual que 0,5 y como “No Alto” en caso contrario. Con estas predicciones construyo la **matriz de confusión** tomando `SalarioAlto = "Alto"` como clase positiva.
+
+En la matriz de confusión:
+
+* **TP (verdaderos positivos)**: 753 casos con `SalarioAlto = "Alto"` clasificados correctamente como “Alto”.
+* **TN (verdaderos negativos)**: 788 casos con `SalarioAlto = "No Alto"` clasificados correctamente como “No Alto”.
+* **FP (falsos positivos)**: 219 casos con salario “No Alto” clasificados como “Alto”.
+* **FN (falsos negativos)**: 240 casos con salario “Alto” clasificados como “No Alto”.
+
+A partir de estos valores:
+
+* La **Exactitud (Accuracy)** es aproximadamente **0,77**. Es decir, el modelo acierta alrededor del 77 % de las observaciones del conjunto de test.
+* La **Sensibilidad (Sensitivity)** es aproximadamente **0,76**, lo que significa que el modelo identifica correctamente cerca del 76 % de las personas con salario alto.
+* La **Especificidad (Specificity)** es aproximadamente **0,78**, de modo que el 78 % de las personas con salario no alto se clasifican correctamente como “No Alto”.
+
+En conjunto, estos resultados indican que el modelo tiene un **comportamiento razonablemente equilibrado** entre la detección de salarios altos (sensibilidad) y la correcta clasificación de salarios no altos (especificidad), con una exactitud global en torno al 77 %, teniendo en cuenta que se utiliza un punto de corte sencillo de 0,5.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## 2.5. Predicción
+
+En este apartado se pide **identificar los 5 perfiles de empleados del conjunto de test con la probabilidad predicha más alta de ser `SalarioAlto`** y mostrar sus características principales en una tabla.
+
+Parto del mismo modelo logístico `mod_logit` del apartado 2.2 y del conjunto `test_log`.
+
+
+```{r top5_perfiles_alto, message=FALSE, warning=FALSE}
+# 1) Probabilidades predichas de salario alto en el conjunto de test
+prob_test <- predict(mod_logit, newdata = test_log, type = "response")
+
+# 2) Añado la probabilidad al data frame de test
+test_log_pred <- test_log |>
+  dplyr::mutate(prob_SalarioAlto = prob_test)
+
+# 3) Ordeno de mayor a menor probabilidad y selecciono los 5 primeros
+top5 <- test_log_pred |>
+  dplyr::arrange(dplyr::desc(prob_SalarioAlto)) |>
+  dplyr::select(
+    SalarioAlto, prob_SalarioAlto,
+    SEXO, TIPOPAIS, ESTU, ANOANTI, JAP,
+    TIPOJOR, TIPOCON, CNACE_grp, CNO1_grp
+  ) |>
+  head(5)
+
+top5
+```
+
+### Interpretación
+
+En la tabla `top5` se muestran los **cinco empleados del conjunto de test** para los que el modelo logístico `mod_logit` asigna la **probabilidad más alta de tener un salario alto** (`prob_SalarioAlto`).
+
+* Cada fila corresponde a un empleado del conjunto de prueba.
+* La columna `prob_SalarioAlto` indica la **probabilidad predicha** de pertenecer al grupo “Alto”.
+* El resto de columnas (`SEXO`, `TIPOPAIS`, `ESTU`, `ANOANTI`, `JAP`, `TIPOJOR`, `TIPOCON`, `CNACE_grp`, `CNO1_grp`) permiten ver qué combinaciones de características el modelo asocia con una probabilidad muy elevada de salario alto.
+
+A partir de la tabla que se obtiene al ejecutar el código, se pueden identificar patrones típicos en estos perfiles (por ejemplo, niveles altos de estudios, mayor antigüedad, jornada completa, determinados sectores y grupos ocupacionales). En cualquier caso, estos resultados deben interpretarse **condicionados al modelo** y a las variables disponibles: el hecho de que aparezcan entre los “top 5” no implica causalidad, sino que el modelo considera que esas combinaciones se corresponden con una probabilidad especialmente alta de pertenecer al grupo de salario alto.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### 2.6. Bondad del ajuste y curva ROC
+
+En este apartado evalúo la eficacia global del modelo logístico `mod_logit`.
+Primero comparo la devianza nula y la devianza residual con un test Chi-cuadrado.
+Después dibujo la curva ROC y calculo el área bajo la curva (AUC) usando la librería `pROC`.
+
+```{r chi_sq_test, echo=TRUE}
+
+# devianza nula y devianza residual del modelo logístico
+dev_null <- mod_logit$null.deviance
+dev_res  <- mod_logit$deviance
+
+# diferencia de devianzas y grados de libertad
+dif_dev <- dev_null - dev_res
+df_diff <- mod_logit$df.null - mod_logit$df.residual
+
+dev_null
+dev_res
+dif_dev
+df_diff
+
+# p-valor del test Chi-cuadrado
+p_val_chi <- 1 - pchisq(dif_dev, df = df_diff)
+p_val_chi
+```
+
+Con mi ejecución, los valores de devianza han sido aproximadamente:
+
+* `dev_null ≈ 11090.33`
+* `dev_res  ≈ 7313.75`
+* `dif_dev  ≈ 3776.58`
+* `df_diff  = 15`
+* `p_val_chi ≈ 0` (numéricamente muy cercano a 0)
+
+La devianza nula corresponde al modelo sin predictores (solo intercepto), mientras que la devianza residual corresponde al modelo logístico `mod_logit` con todas las variables explicativas.
+La diferencia de devianzas es muy grande y el p-valor del test Chi-cuadrado es prácticamente 0, por lo que **rechazo claramente** la hipótesis de que el modelo completo no mejore al modelo nulo.
+En otras palabras, el modelo logístico con estos predictores es **globalmente significativo** y las variables explicativas aportan información relevante para predecir `SalarioAlto`.
+
+```{r roc_auc, echo=TRUE, message=FALSE, warning=FALSE}
+
+library(pROC)
+
+# probabilidades predichas en el conjunto de test
+prob_test <- predict(mod_logit, newdata = test_log, type = "response")
+
+# objeto ROC: clase positiva = "Alto"
+roc_obj <- roc(
+  response  = test_log$SalarioAlto,
+  predictor = prob_test,
+  levels    = c("No Alto", "Alto"),
+  direction = "<"
+)
+
+# dibujo de la curva ROC
+plot(
+  roc_obj,
+  main = "Curva ROC – Modelo logístico para SalarioAlto"
+)
+
+# cálculo del área bajo la curva
+auc_val <- auc(roc_obj)
+auc_val
+```
+
+En la curva ROC represento, para todos los posibles puntos de corte de probabilidad:
+
+* en el eje Y, la **sensibilidad** (proporción de verdaderos positivos),
+* en el eje X, 1 − **especificidad** (proporción de falsos positivos).
+
+Con mi ejecución, el área bajo la curva es aproximadamente:
+
+* `AUC ≈ 0.8512`
+
+Un valor de AUC claramente superior a 0,5 indica que el modelo discrimina mejor que el azar. Valores alrededor de 0,8–0,9 se consideran una **capacidad discriminante buena**.
+En este caso, un AUC cercano a 0,85 sugiere que el modelo logístico tiene una capacidad razonablemente buena para distinguir entre empleados con salario alto y no alto, coherente con los resultados de la matriz de confusión del apartado 2.4.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+### 3.1. Tabla resumen
+
+En esta sección sintetizo las principales conclusiones del estudio. La tabla siguiente recoge, para cada pregunta de investigación, los resultados estadísticos más relevantes y una breve conclusión.
+
+| Pregunta de investigación                                                                 | Resultados estadísticos clave                                                                                                                     | Conclusión breve                                                                                                                                                                      |
+|:------------------------------------------------------------------------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------|:--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| ¿Existen diferencias salariales asociadas a sexo y nacionalidad?                         | Modelos lineales simples: coeficiente de SEXOMujer ≈ −6 472 € y de TIPOPAISExtranjera ≈ −5 547 € (ambos con p-valores muy pequeños).             | Sin controlar por otras variables, las mujeres y las personas con nacionalidad extranjera presentan salarios medios claramente más bajos que los hombres y las personas españolas.   |
+| ¿Qué factores explican el salario bruto anual?                                           | Modelo lineal múltiple final (mod_final): R^2 ajustado ≈ 0,35. Coeficientes positivos para ANOANTI y JAP, y para niveles altos de ESTU; coeficiente negativo para SEXOMujer, etc. | La antigüedad, la jornada anual y el nivel de estudios se asocian con salarios más altos. Las mujeres, ciertos sectores y grupos ocupacionales mantienen salarios medios inferiores. |
+| ¿Se mantiene la brecha salarial al ajustar por otras variables (brecha “ajustada”)?      | En mod_final: SEXOMujer ≈ −6 118 € (similar a la brecha “bruta”). TIPOPAISExtranjera cambia de ≈ −5 547 € (modelo simple) a ≈ +2 444 € (modelo múltiple).                        | La brecha de género persiste incluso tras ajustar por antigüedad, jornada, estudios, sector y ocupación. En cambio, la diferencia por nacionalidad se invierte al controlar por ellos.|
+| ¿Qué factores influyen en la probabilidad de tener un salario alto (SalarioAlto)?        | Modelo logístico (mod_logit): OR > 1 para ANOANTI (≈ 1,10 por año) y niveles altos de ESTU (OR muy superiores a 1); OR < 1 para SEXOMujer, TIPOCONDeterminado, ciertos grupos ocupacionales. | Más antigüedad, mayor jornada y niveles altos de estudios aumentan la probabilidad de salario alto. Ser mujer, tener contrato determinado o pertenecer a ciertos grupos ocupacionales la reduce. |
+| ¿Qué capacidad predictiva tiene el modelo lineal para el salario continuo?               | mod_final sobre test: R^2 ajustado ≈ 0,35; RMSE ≈ 16 710 € en salarios con mediana ≈ 23 000 €.                                                  | El modelo lineal captura tendencias generales en el salario, pero el error típico de predicción es elevado; no es adecuado para predecir con precisión el salario individual.        |
+| ¿Qué capacidad tiene el modelo logístico para clasificar salarios altos vs no altos?     | Sobre test: Accuracy ≈ 0,77; Sensibilidad ≈ 0,76; Especificidad ≈ 0,78; AUC ROC ≈ 0,85.                                                         | El modelo logístico clasifica razonablemente bien a los empleados en “salario alto” / “no alto”, con buena capacidad discriminante (AUC ≈ 0,85) y un equilibrio aceptable entre errores.|
+
+
+
+
+
+
+
+
+
+
+
+### 3.2. Conclusiones y reflexión ética
+
+**Brecha salarial “bruta” vs “ajustada”**
+
+En el modelo lineal simple del apartado 1.5, donde sólo se incluye la variable SEXO, el coeficiente para *Mujer* es de aproximadamente −6 472 €: las mujeres cobran de media unos 6 500 € menos que los hombres.
+
+En el modelo múltiple final del apartado 1.7, que controla por antigüedad, jornada, nivel de estudios, tipo de jornada, sector y grupo ocupacional, el coeficiente de *Mujer* pasa a unos −6 118 €. Es decir, la brecha “ajustada” sigue siendo muy parecida a la “bruta” y ronda el 27 % del salario mediano del conjunto de datos. Por tanto, las diferencias de salario entre hombres y mujeres no se explican sólo por factores observables como la antigüedad, el tipo de contrato o el sector; incluso comparando perfiles similares, el modelo sigue estimando un salario claramente menor para las mujeres.
+
+En cambio, para TIPOPAIS la situación es distinta: en el modelo simple las personas extranjeras cobraban menos que las españolas, mientras que en el modelo múltiple el signo se invierte y la diferencia deja de ser negativa. Esto sugiere que la “brecha” por nacionalidad estaba muy condicionada por la distinta distribución de sectores, ocupaciones o tipos de jornada, y que una parte importante de esa diferencia desaparece al ajustar por estas variables.
+
+**Limitaciones y reflexión ética**
+
+Aunque los resultados apuntan a una brecha salarial de género persistente, hay varias limitaciones importantes:
+
+* La variable SEXO es muy simplificada y no recoge toda la diversidad de identidades de género ni situaciones laborales (reducciones de jornada por cuidados, carreras profesionales intermitentes, etc.).
+* Faltan variables potencialmente clave: rendimiento, negociaciones individuales, clima organizativo, sesgos en promociones, responsabilidades familiares, sector público/privado detallado, etc. Parte de la brecha podría deberse a factores no observados.
+* El análisis es observacional y transversal: sólo describe asociaciones en un año concreto y no permite concluir causalidad.
+* Los modelos hacen suposiciones estadísticas (relaciones lineales, independencia de observaciones, etc.) que se cumplen solo de forma aproximada.
+
+Desde un punto de vista ético, esto significa que los modelos son útiles para detectar patrones preocupantes (como una brecha de género que se mantiene tras varios ajustes), pero no bastan por sí solos para atribuir responsabilidades ni para diseñar políticas. Sus resultados deberían interpretarse con prudencia y complementarse con análisis cualitativos y con más información sobre el contexto laboral real de mujeres y hombres.
+
+
+
+
+
+
